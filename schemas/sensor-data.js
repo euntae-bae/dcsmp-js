@@ -14,7 +14,7 @@ const sensorSchema = new Schema({
         type: String,
         required: true
     },
-    pedoCount: {
+    stepMean: {
         type: Number,
         required: true
     },

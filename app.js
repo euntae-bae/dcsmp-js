@@ -82,7 +82,7 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
     sensorData.userId = msgObj.userId;
     sensorData.deviceId = msgObj.deviceId;
     sensorData.sensorId = msgObj.sensorId;
-    sensorData.pedoCount = Number(msgObj.pedoCount);
+    sensorData.stepMean = Number(msgObj.pedoCount);
     sensorData.datetime = getDate(msgObj.datetime);
 
     console.log(sensorData);
