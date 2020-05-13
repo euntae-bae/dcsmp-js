@@ -49,8 +49,8 @@ client.on('connect', function () {
     let topicActionTest = mqttProfile.topic_action_test + '#';
     let topicEam = mqttProfile.topic_eam + '#';
 
-    //let topicList = [ topicSensor, topicSensorTest, topicAction, topicActionTest, topicEam ];
-    let topicList = [ topicSensor, topicSensorTest ];
+    let topicList = [ topicSensor, topicSensorTest, topicAction, topicActionTest, topicEam ];
+    //let topicList = [ topicSensor, topicSensorTest ];
 
 
     client.subscribe(topicList, function (err) {
@@ -60,14 +60,6 @@ client.on('connect', function () {
         }
         console.log('subscribed topic: ', topicList);
     });
-
-    // client.subscribe(topicSensorTest, function (err) { // mqttProfile.topic_sensor
-    //     if (err) {
-    //         console.log(err);
-    //         process.exit(1);
-    //     }
-    //     console.log('subscribed topic: ' + topicSensorTest);
-    // });
 });
 
 client.on('error', function (err) {
@@ -75,26 +67,69 @@ client.on('error', function (err) {
     process.exit(1);
 });
 
+// String userId로 식별
+// 각 userId마다 저장하는 데이터:
+// Boolean calcEnabled  // 보폭수 측정 여부
+// String deviceId
+// String sensorId
+// Number dataCnt       // 측정된 데이터 수
+// Number stepSum       // 측정된 보폭수의 총합
+// => deviceId, sensorId는 옵션, 일단은 항목으로 집어넣도록 한다.
+var userList = {};
+
 client.on('message', function (topic, message, packet) { // MQTT로 전송되는 데이터는 Buffer형이다.
     console.log('topic: ' + topic);
+    // 토픽 끝의 슬래시 기호(/)를 제거한다. -> 테스트 토픽에도 동시에 적용 가능
+    let topicSensor = mqttProfile.topic_sensor.substr(0, mqttProfile.topic_sensor.length - 1);
+    let topicAction = mqttProfile.topic_action.substr(0, mqttProfile.topic_action.length - 1);
     let msgObj = JSON.parse(message.toString());
-    let sensorData = new SensorData();
-    sensorData.userId = msgObj.userId;
-    sensorData.deviceId = msgObj.deviceId;
-    sensorData.sensorId = msgObj.sensorId;
-    sensorData.stepMean = Number(msgObj.pedoCount);
-    sensorData.datetime = getDate(msgObj.datetime);
 
-    console.log(sensorData);
-    sensorData.save(function (err) {
-        if (err) {
-            console.error(err);
-            client.end();
-            mongoose.disconnect();
-            process.exit(1);
+
+    if (topic.indexOf(topicAction) != -1) {
+        let userId = msgObj.userid; // action의 userid
+        let calcEnabled = Boolean(Number(msgObj.enable_calculate_step_length));
+        
+        if (calcEnabled) { // 보폭 측정 시작
+            userList[userId].calcEnabled = true;
+            userList[userId].dataCnt = 0;
+            userList[userId].stepSum = 0;
         }
-        console.log('=> saved data');
-    });
+        else { // 보폭 측정 종료
+            if (userList[userId]) {
+                // userId 항목이 존재하고 보폭 측정 종료 신호가 수신되면 평균 보폭을 계산하여 데이터베이스에 저장한다.
+                userList[userId].calcEnabled = false;
+                let stepMean = userList[userId].stepSum / userList[userId].dataCnt;
+                let sensorData = new SensorData();
+                sensorData.userId = userId;
+                sensorData.deviceId = userList[userId].deviceId;
+                sensorData.sensorId = userList[userId].sensorId;
+                sensorData.stepMean = stepMean;
+                sensorData.datetime = new Date();
+
+                // 데이터베이스에 평균 보폭을 포함한 데이터를 입력한다.
+                console.log(sensorData);
+                sensorData.save(function (err) {
+                    if (err) {
+                        console.error(err);
+                        client.end();
+                        mongoose.disconnect();
+                        process.exit(1);
+                    }
+                    console.log('=> saved data');
+                });
+            }
+        }
+
+    }
+    else if (topic.indexOf(topicSensor) != -1) {
+        let userId = msgObj.userId; // snesor의 userId
+        if (userList[userId].calcEnabled) { // 측정 중일 때만 테이블을 갱신한다.
+            userList[userId].deviceId = msgObj.deviceId;
+            userList[userId].sensorId = msgObj.sensorId;
+            userList[userId].dataCnt++;
+            userList[userId].stepSum = Number(msgObj.pedoCount);
+        }
+    }
 });
 
 function getDate(datetimeStr) {
