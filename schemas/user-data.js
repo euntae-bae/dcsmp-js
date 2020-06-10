@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const { Schema } = mongoose;
-const sensorSchema = new Schema({
+const userSchema = new Schema({
     userId: {
         type: String,
         required: true
@@ -18,10 +18,22 @@ const sensorSchema = new Schema({
         type: Number,
         required: true
     },
-    datetime: {
+    speed: {
+        type: Number,
+        default: 0
+    },
+    stepStartTime: {
+        type: Date,
+        default: Date.now
+    },
+    stepEndTime: {
+        type: Date,
+        default: Date.now
+    },
+    fallenTime: { // 낙상 발생 시간
         type: Date,
         default: Date.now
     }
 });
 
-module.exports = mongoose.model('SensorData', sensorSchema);
+module.exports = mongoose.model('UserData', userSchema);
