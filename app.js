@@ -49,8 +49,9 @@ client.on('connect', function () {
     let topicAction = mqttProfile.topic_action + '#';
     let topicActionTest = mqttProfile.topic_action_test + '#';
     let topicEam = mqttProfile.topic_eam + '#';
+    let topicEamTest = mqttProfile.topic_eam_test + '#';
 
-    let topicList = [ topicSensor, topicSensorTest, topicAction, topicActionTest, topicEam ];
+    let topicList = [ topicSensor, topicSensorTest, topicAction, topicActionTest, topicEam, topicEamTest ];
 
 
     client.subscribe(topicList, function (err) {
@@ -76,6 +77,8 @@ client.on('error', function (err) {
 // Number stepSum       // 측정된 보폭수의 총합
 // Date stepStartTime
 // Date stepEndTime
+// avgStride
+// walkingSpeed
 // => deviceId, sensorId는 옵션, 일단은 항목으로 집어넣도록 한다.
 var userList = {};
 
@@ -110,6 +113,8 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
         let disableStep = false;
         let accidentActionList = new Array();
 
+        let userData;
+
         if (typeof msgObj.order_enable_calculate_step_length !== 'undefined') {
             enableStep = Boolean(Number(msgObj.order_enable_calculate_step_length));
         }
@@ -120,6 +125,14 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
             console.log(' * accident! *');
             console.dir(msgObj.accident_action_list);
             accidentActionList = msgObj.accident_action_list; // 정수 배열 형태로 입력
+        }
+        if (typeof msgObj.calibrated_stride !== 'undefined') {
+            userList[userId].avgStride = msgObj.calibrated_stride;
+            userList[userId].FLAG |= 0x02;
+        }
+        if (typeof msgObj.calibrated_walking_speed !== 'undefined') {
+            userList[userId].walkingSpeed = msgObj.calibrated_walking_speed;
+            userList[userId].FLAG |= 0x01;
         }
 
         console.log('userId: ' + userId);
@@ -144,47 +157,51 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
             });
         }
 
-        else if (enableStep) { // 보폭수 측정 시작 신호
-            if (!userList[userId].calcEnabled) {
+        if (enableStep) { // 보폭수 측정 시작 신호
+            if (typeof userList[userId] === 'undefined' || !userList[userId].calcEnabled) {
+                console.log(' * 보폭수 측정 시작! *');
+                userList[userId] = {};
                 userList[userId].stepStartTime = datetime;
                 userList[userId].dataCnt = 0;
                 userList[userId].stepSum = 0;
+                userList[userId].FLAG = 0;
                 userList[userId].calcEnabled = true;
             }
         }
         else if (disableStep) { // 보폭 수 측정 종료 신호
-            if (userList[userId].calcEnabled) {
+            if (typeof userList[userId] !== 'undefined' && userList[userId].calcEnabled) {
+                console.log(' * 보폭수 측정 종료 *');
                 userList[userId].stepEndTime = datetime;
                 // 측정 시간 시작과 끝의 구간을 초 단위로 계산
-                let elapsedTime = (userList[userId].stepEndTime - userList[userId].stepStartTime) / 1000;
+                //let elapsedTime = (userList[userId].stepEndTime - userList[userId].stepStartTime) / 1000;
                 // 평균 보폭 계산
-                let stepMean = userList[userId].stepSum / userList[userId].dataCnt;
+                //let avgStride = userList[userId].stepSum / userList[userId].dataCnt;
                 // 이동 속도 계산
-                let speed = 0.0; // TODO
-
-                // DB 입력을 위한 스키마 인스턴스 생성
-                let userData = new UserData();
-                userData.userId = userId;
-                userData.deviceId = userList[userId].deviceId;
-                userData.sensorId = userList[userId].sensorId;
-                userData.stepMean = stepMean;
-                userData.speed = speed;
-                userData.stepStartTime = userList[userId].stepStartTime;
-                userData.stepEndTime = userList[userId].stepEndTime;
-
-                // 데이터베이스에 평균 보폭을 포함한 데이터를 입력한다.
-                console.log(userData);
-                userData.save(function (err) {
-                    if (err) {
-                        console.error(err);
-                        client.end();
-                        mongoose.disconnect();
-                        process.exit(1);
-                    }
-                    console.log(' * data saved *');
-                });
-                userList[userId].calcEnabled = false;
+                //let speed = 0.0; // TODO
+                // ** 평균 보폭과 이동 속도는 eam 토픽 메시지로 전달되는 것으로 결정 **
             }
+        }
+
+        if (typeof userList[userId] !== 'undefined' && userList[userId].FLAG == 0x03) {
+            // DB 입력을 위한 스키마 인스턴스 생성
+            userData = new UserData();
+            userData.userId = userId;
+            userData.deviceId = userList[userId].deviceId;
+            userData.sensorId = userList[userId].sensorId;
+            userData.avgStride = userList[userId].avgStride;
+            userData.speed = userList[userId].walkingSpeed;
+            userData.stepStartTime = userList[userId].stepStartTime;
+            userData.stepEndTime = userList[userId].stepEndTime;
+            userList[userId].calcEnabled = false;
+            userData.save(function (err) {
+                if (err) {
+                    console.error(err);
+                    client.end();
+                    mongoose.disconnect();
+                    process.exit(1);
+                }
+                console.log(' * data saved *');
+            });
         }
     }
     /* topic: action */
@@ -223,12 +240,12 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
             if (userList[userId]) {
                 // userId 항목이 존재하고 보폭 측정 종료 신호가 수신되면 평균 보폭을 계산하여 데이터베이스에 저장한다.
                 userList[userId].calcEnabled = false;
-                let stepMean = userList[userId].stepSum / userList[userId].dataCnt;
+                let avgStride = userList[userId].stepSum / userList[userId].dataCnt;
                 let sensorData = new SensorData();
                 sensorData.userId = userId;
                 sensorData.deviceId = userList[userId].deviceId;
                 sensorData.sensorId = userList[userId].sensorId;
-                sensorData.stepMean = stepMean;
+                sensorData.avgStride = avgStride;
                 sensorData.datetime = new Date();
 
                 // 데이터베이스에 평균 보폭을 포함한 데이터를 입력한다.

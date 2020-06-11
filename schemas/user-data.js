@@ -8,7 +8,7 @@ const userSchema = new Schema({
     },
     deviceId: String,
     sensorId: String,
-    stepMean: {
+    avgStride: {
         type: Number,
         default: 0
     },

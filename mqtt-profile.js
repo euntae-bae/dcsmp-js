@@ -24,5 +24,6 @@ module.exports = {
     topic_action_test: 'buddybot/action_test/',
     topic_sensor: 'buddybot/sensordata/',
     topic_sensor_test: 'buddybot/sensordata_test/',
-    topic_eam: 'buddybot/eam/'
+    topic_eam: 'buddybot/eam/',
+    topic_eam_test: 'buddybot/eam_test/'
 };
