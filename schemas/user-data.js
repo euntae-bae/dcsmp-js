@@ -6,17 +6,11 @@ const userSchema = new Schema({
         type: String,
         required: true
     },
-    deviceId: {
-        type: String,
-        required: true
-    },
-    sensorId: {
-        type: String,
-        required: true
-    },
+    deviceId: String,
+    sensorId: String,
     stepMean: {
         type: Number,
-        required: true
+        default: 0
     },
     speed: {
         type: Number,
@@ -27,10 +21,6 @@ const userSchema = new Schema({
         default: Date.now
     },
     stepEndTime: {
-        type: Date,
-        default: Date.now
-    },
-    fallenTime: { // 낙상 발생 시간
         type: Date,
         default: Date.now
     }

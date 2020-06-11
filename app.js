@@ -14,7 +14,8 @@ var usersRouter = require('./routes/users');
 //connect(); // schemas/index.js에 함수로 정의됨
 const mongoose = require('mongoose');
 const dbProfile = require('./db-profile');
-var SensorData = require('./schemas/user-data');
+var UserData = require('./schemas/user-data');
+var UserAccident = require('./schemas/user-accident');
 
 mongoose.connect(dbProfile.host, { useNewUrlParser: true, useUnifiedTopology: true, dbName: dbProfile.dbName, user: dbProfile.username, pass: dbProfile.password });
 
@@ -50,7 +51,6 @@ client.on('connect', function () {
     let topicEam = mqttProfile.topic_eam + '#';
 
     let topicList = [ topicSensor, topicSensorTest, topicAction, topicActionTest, topicEam ];
-    //let topicList = [ topicSensor, topicSensorTest ];
 
 
     client.subscribe(topicList, function (err) {
@@ -80,7 +80,6 @@ client.on('error', function (err) {
 var userList = {};
 
 client.on('message', function (topic, message, packet) { // MQTT로 전송되는 데이터는 Buffer형이다.
-    console.log('topic: ' + topic);
     // 토픽 끝의 슬래시 기호(/)를 제거한다. -> 테스트 토픽에도 동시에 적용 가능
     // 테스트 토픽에는 _test가 붙으며, 마지막 슬래시 기호를 제거함으로써 토픽 문자열 포함 여부를 테스트 토픽과 일반 토픽을 따로 구현할 필요가 없어진다.
     let topicSensor = mqttProfile.topic_sensor.substr(0, mqttProfile.topic_sensor.length - 1);
@@ -89,33 +88,63 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
 
     let msgObj = JSON.parse(message.toString());
 
+    // TEST Code /////////////////////////////////////
     console.log('topic: ' + topic);
-    console.log('topicSensor: ' + topicSensor);
-    console.log('topicAction: '+ topicAction);
-    console.log('topicEam: '+ topicEam);
-    console.log(msgObj);
+    // console.log('topicSensor: ' + topicSensor);
+    // console.log('topicAction: '+ topicAction);
+    // console.log('topicEam: '+ topicEam);
+    // console.log(msgObj);
+    //////////////////////////////////////////////////
 
-    // EAM 토픽을 통해 보폭수 측정 트리거 신호가 들어온다.
+    // 1. EAM 토픽을 통해 보폭수 측정 트리거 신호가 들어온다.
     // order_enable_calculate_step_length
     // order_disable_calculate_step_length
-
-    // EAM 토픽을 통해 액션과 관련된 상태 정보(낙상 시 정보)가 들어온다고 한다. (enum MQTT_ACTION_SIG_ENUM)
-    // 문자열이 아니라 정수 배열?
-
+    // 2. EAM 토픽을 통해 액션과 관련된 상태 정보(낙상 시 정보)가 들어온다고 한다. (enum MQTT_ACTION_SIG_ENUM)
+    /* topic: eam */
     if (topic.indexOf(topicEam) != -1) {
+        console.log("** eam message received **");
+
         let userId = msgObj.userId; // EAM의 userId
         let datetime = getDate(msgObj.datetime);
-        let enableStep = Boolean(Number(msgObj.order_enable_calculate_step_length));
-        let disableStep = Boolean(Number(msgObj.order_disable_calculate_step_length));
-        let accidentActionList = JSON.parse(msgObj.accident_action_list); // accident_action_list를 정수 배열을 묶은 문자열이라고 가정
+        let enableStep = false;
+        let disableStep = false;
+        let accidentActionList = new Array();
+
+        if (typeof msgObj.order_enable_calculate_step_length !== 'undefined') {
+            enableStep = Boolean(Number(msgObj.order_enable_calculate_step_length));
+        }
+        if (typeof msgObj.order_disable_calculate_step_length !== 'undefined') {
+            disableStep = Boolean(Number(msgObj.order_disable_calculate_step_length));
+        }
+        if (typeof msgObj.accident_action_list !== 'undefined') {
+            console.log(' * accident! *');
+            console.dir(msgObj.accident_action_list);
+            accidentActionList = msgObj.accident_action_list; // 정수 배열 형태로 입력
+        }
 
         console.log('userId: ' + userId);
-        console.log(datetime);
-        console.log('enableStep', enableStep);
-        console.log('disableStep', disableStep);
+        console.log('datetime: ', datetime);
+        console.log('enableStep: ', enableStep);
+        console.log('disableStep: ', disableStep);
         console.log(accidentActionList);
 
-        if (enableStep) { // 보폭수 측정 시작 신호
+        if (accidentActionList.length) {
+            let userAccident = new UserAccident();
+            userAccident.userId = userId;
+            userAccident.fallingTime = datetime;
+            userAccident.accidentActionList = accidentActionList;
+            userAccident.save(function (err) {
+                if (err) {
+                    console.error(err);
+                    client.end();
+                    mongoose.disconnect();
+                    process.exit(1);
+                }
+                console.log(' * accident data saved *');
+            });
+        }
+
+        else if (enableStep) { // 보폭수 측정 시작 신호
             if (!userList[userId].calcEnabled) {
                 userList[userId].stepStartTime = datetime;
                 userList[userId].dataCnt = 0;
@@ -123,8 +152,7 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
                 userList[userId].calcEnabled = true;
             }
         }
-
-        if (disableStep) { // 보폭 수 측정 종료 신호
+        else if (disableStep) { // 보폭 수 측정 종료 신호
             if (userList[userId].calcEnabled) {
                 userList[userId].stepEndTime = datetime;
                 // 측정 시간 시작과 끝의 구간을 초 단위로 계산
@@ -135,7 +163,7 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
                 let speed = 0.0; // TODO
 
                 // DB 입력을 위한 스키마 인스턴스 생성
-                let userData = new SensorData();
+                let userData = new UserData();
                 userData.userId = userId;
                 userData.deviceId = userList[userId].deviceId;
                 userData.sensorId = userList[userId].sensorId;
@@ -153,27 +181,30 @@ client.on('message', function (topic, message, packet) { // MQTT로 전송되는
                         mongoose.disconnect();
                         process.exit(1);
                     }
-                    console.log('=> saved data');
+                    console.log(' * data saved *');
                 });
-
                 userList[userId].calcEnabled = false;
             }
         }
-
-        if (accidentActionList.length) { // 낙상 발생
-            // 낙상 정보를 DB에 저장하는 방법은?
-        }
     }
+    /* topic: action */
     else if (topic.indexOf(topicAction) != -1) {
-        //
+        console.log("** action message received **");
     }
+    /* topic: sensor data */
     else if (topic.indexOf(topicSensor) != -1) {
+        console.log("** sensordata message received **");
         let userId = msgObj.userId; // sensor의 userId
-        if (userList[userId].calcEnabled) { // 측정 중일 때만 테이블을 갱신한다.
-            userList[userId].deviceId = msgObj.deviceId;
-            userList[userId].sensorId = msgObj.sensorId;
-            userList[userId].dataCnt++;
-            userList[userId].stepSum = Number(msgObj.pedoCount); // pedoCount는 누적합으로 제공된다.
+
+        console.log('userId: ' + userId);
+        
+        if (typeof userList[userId] !== 'undefined' && userList[userId].calcEnabled) {
+            if (userList[userId].calcEnabled) { // 측정 중일 때만 테이블을 갱신한다.
+                userList[userId].deviceId = msgObj.deviceId;
+                userList[userId].sensorId = msgObj.sensorId;
+                userList[userId].dataCnt++;
+                userList[userId].stepSum = Number(msgObj.pedoCount); // pedoCount는 누적합으로 제공된다.
+            }
         }
     }
 
